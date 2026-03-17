@@ -21,6 +21,8 @@ loc = os.getcwd() + '/'
 
 # %% === Load data and define parameters  ===6
 net = 'sintered_glass'
+# net = 'CB_7mm_1.2um_1_1800.raw'
+
 # Scale can be changed as in Paper of Islahuddin
 scale = 1
 direction = 'x'
@@ -28,10 +30,10 @@ direction = 'x'
 # for different cases see the paper of Islahuddin
 case = 'wetting'  # wetting or imbibition
 # trapping = air entrapment
-trapping = False
+trapping = True
 # dp True calculates both the wetting and the drying path, dp false calculates only the wetting path
 dp = True
-drying_case = 'desorption'  # desorption or drying
+drying_case = 'drying'  # desorption or drying
 
 saveparaview = False
 Amethod = 'g'
@@ -92,6 +94,8 @@ outlet_imb = pn['pore.outlet']  # for imbibition
 if case == 'imbibition':
     dp = False
 #    trapping = True
+elif case == 'wetting':
+    pinlet = ~pn['pore.internal']
 elif drying_case == 'desorption':
     pinlet = ~pn['pore.internal']  # inlet for desorption
 

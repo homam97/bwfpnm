@@ -15,6 +15,7 @@ modified routine_pore_percolation:
 """
 import bwfpnm as bpnm
 import scipy as sp
+import numpy as np
 from numpy.linalg import cond
 
 ctrl = bpnm.Base.Controller()
@@ -173,14 +174,18 @@ def algorithm(NetIns, WaterIns, VapourIns, Class=None, cases=['wetting'],
             alg_wp.run_wetting(**kwargs)
             if trapping:
                 outlet = ~NetIns['pore.internal']
-                alg_wp.evaluate_trapping_wetting(p_outlets=outlet, mode='clone')
+                # alg_wp.evaluate_trapping_wetting(p_outlets=outlet, mode='clone')
+                alg_wp.evaluate_trapping_wetting_fast(p_outlets=outlet, mode='clone')
+
                 alg_wp.copy_results(prop_names=[case+'_trapped_pc'])
         elif case=='imbibition':
             alg_wp.set_inlets_imbibition(pores=inlet_imb)
             alg_wp.run_imbibition(**kwargs)
             if trapping:
-                alg_wp.evaluate_trapping_imbibition(p_outlets=outlet,
-                                                    mode='clone')
+                # alg_wp.evaluate_trapping_imbibition(p_outlets=outlet, mode='clone') 
+                alg_wp.evaluate_trapping_imbibition_fast(p_outlets=outlet, mode='clone') 
+                
+               
     # copy result to wet phase
     alg_wp.copy_results(prop_names=[case+'_inv_seq', case+'_inv_pc',
                                     case+'_inv_sat'])
@@ -188,7 +193,7 @@ def algorithm(NetIns, WaterIns, VapourIns, Class=None, cases=['wetting'],
         alg_wp.copy_results(prop_names=[case+'_inv_seq_trapping',
                                         case+'_inv_pc_trapping',
                                         case+'_inv_sat_trapping',
-                                        case+'_trapped_seq',
+                                        # case+'_trapped_seq',
                                         case+'_trapped_pc'])
     # if desorption/drying from wetting/imbibition
     if dp:

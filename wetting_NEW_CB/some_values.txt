@@ -1,0 +1,6 @@
+Number of trapped pores: 417
+Number of trapped throats: 75
+trapped vol: 1.9214099633999998e-10
+total vol: 6.920587441300001e-10
+liquid vol: 4.9991774779e-10
+min(Psat trap): 2.4067689544171628e-05

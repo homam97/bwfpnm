@@ -7,10 +7,15 @@ ImbibitionPercolation: modified OpenPNM's InvasionPercolation
 """
 import heapq as hq
 import scipy as sp
+import numpy as np
 from OpenPNM.Algorithms import GenericAlgorithm
 from OpenPNM.Base import logging
 from collections import Counter as counter
 from bwfpnm.Utilities import isclose
+from scipy.sparse import csr_matrix, lil_matrix
+from .find_trapped_pores import _find_trapped_pores
+import time
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +113,7 @@ class Percolation(GenericAlgorithm):
             self._p_order = sp.array(_p_order)
             self._t_order = sp.array(_t_order)
             self._wetting_pc = inv_points
+
         # not implemented like below, since size != Np or Nt
 #        self['pore.wetting_order'] = _p_order
 #        self['throat.wetting_order'] = _t_order
@@ -1100,7 +1106,7 @@ class Percolation(GenericAlgorithm):
             other: 'replace' => replacing the result from run_wetting.
 
         Returns
-        -------
+    
         It creates arrays called ``pore.trapped`` and ``throat.trapped``, but
         also adjusts the ``pore.prop_name`` and ``throat.prop_name`` arrays to set
         trapped locations to have zero invasion pressure.
@@ -1215,8 +1221,334 @@ class Percolation(GenericAlgorithm):
             self['throat.wetting_inv_sat_trapping'] = Tsat
         else:
             raise Exception('Mode argument is either \'replace\' or \'clone\'')
+        
+        '''
+        np.savetxt("wetting_OLD_CB/trapped_pores.txt", np.where(ptrap)[0], fmt="%s")
+        np.savetxt("wetting_OLD_CB/trapped_throats.txt", np.where(ttrap)[0], fmt="%s")
+        np.savetxt("wetting_OLD_CB/pressure_pores.txt", self['pore.wetting_inv_pc_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/pressure_throats.txt", self['throat.wetting_inv_pc_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/inv_seq_pores.txt", self['pore.wetting_inv_seq_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/inv_seq_throat.txt", self['throat.wetting_inv_seq_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/sat_pores.txt", self['pore.wetting_inv_sat_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/sat_throats.txt", self['throat.wetting_inv_sat_trapping'], fmt="%s")
+        np.savetxt("wetting_OLD_CB/ptrap_pc.txt", ptrappc, fmt="%s")
+        np.savetxt("wetting_OLD_CB/ttrap_pc.txt", ttrappc, fmt="%s")
+        np.savetxt("wetting_OLD_CB/pore_volumes_trap.txt", pvol[np.where(ptrap)[0]], fmt="%s")
+        np.savetxt("wetting_OLD_CB/throat_volumes_trap.txt", tvol[np.where(ptrap)[0]], fmt="%s")
+        '''
+        '''
+        with open("wetting_OLD_CB/some_values.txt", "w") as f:
+            f.write(f"Number of trapped pores: {len(np.where(ptrap)[0])}\n")
+            f.write(f"Number of trapped throats: {len(np.where(ttrap)[0])}\n")
+            f.write(f"min(Psat trap): {min(Psat_trap)}\n")
+        '''
+        print("Number of trapped pores:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats:", len(np.where(ttrap)[0]))
+        print("Number of trapped pores:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats:", len(np.where(ttrap)[0]))
+ 
+    def evaluate_trapping_wetting_fast(self, p_outlets, mode='clone'):
+        """
+        Added on 27/02/2026 by Homam.
+
+        Masson-style reverse-uninvasion using a pore+throat bipartite CSR graph.
+        Produces the same outputs as `evaluate_trapping_wetting.
+        """
+        start = time.perf_counter()
+        inv_points = list(self._wetting_pc)  
+        pvol = self._net['pore.volume']  
+        tvol = self._net['throat.volume']
+        vol = np.concatenate((pvol, tvol))
+        vol_mat = np.sum(pvol) + np.sum(tvol)
+
+        Np = self.Np
+        Nt = self.Nt
+        N_tot = Np + Nt
+
+        ptrappc = np.zeros(Np)
+        ttrappc = np.zeros(Nt)
+        
+        p_pc = self['pore.entry_pressure']
+        t_pc = self['throat.entry_pressure']
+
+        pseq = self['pore.wetting_inv_seq']
+        tseq = self['throat.wetting_inv_seq']
+        tot_seq = np.concatenate((pseq, tseq))
+        Mseq = self._Mseq
+        pseqtrap = Mseq*np.ones([Np, ], dtype=float)
+        tseqtrap = Mseq*np.ones([Nt, ], dtype=float)
+        conns = self._net['throat.conns']  # shape (Nt, 2) with pore indices
 
 
+        # build pore–throat bipartite CSR adjacency for all N_tot nodes
+        AM = lil_matrix((N_tot, N_tot), dtype=np.int8) 
+        for ti, (r, c) in enumerate(conns):
+            e = Np + ti
+            AM[r, e] = 1; AM[e, r] = 1
+            AM[c, e] = 1; AM[e, c] = 1
+        AM = AM.tocsr()
+        indices = AM.indices
+        indptr = AM.indptr
+
+        po_index = np.asarray(np.where(p_outlets)[0], dtype=np.int64)
+
+        (
+        trapped_elements, 
+        trapped_steps,  
+        vol_trapped,
+        pore_id
+        ) = _find_trapped_pores(tot_seq, indices, indptr, po_index, vol)
+        
+        '''
+        trapped_elements: Indices of the trapped pores.
+        trapped_steps: Steps at which pores are trapped.
+        vol_trapped: The sum of total trapped pores' volume.
+        pore_id: The pore indices in the order they are uninvaded.
+
+        Note: For the calculation of the moisture content, by summing up the total trapped volume, we              
+              have the final value of the volumes filled with moisture, and from the last step to the              
+              first, for each pore which is untrapped we will substract it's volume from the total v-
+              olume at that step, which results in a step by step moisture content.
+        '''
+
+        vol_liq = vol_mat - vol_trapped
+        sat = vol_liq / vol_mat
+        sat_array = np.zeros(N_tot)
+        vol[trapped_elements] = 0
+
+        for ind in pore_id:
+            sat_array[ind] = sat
+            sat = sat - (vol[ind]/vol_mat)
+            
+        Psat_trap = sat_array[:Np]
+        Tsat_trap = sat_array[Np:]
+
+        ptrap = trapped_elements[:Np]
+        ttrap = trapped_elements[Np:]
+        
+        end = time.perf_counter() 
+        print("Time taken for calculation of the trapped pores:", end-start)
+
+        # write primary trapping outputs
+        Psat_trap[ptrap] = 10
+        Tsat_trap[ttrap] = 10
+
+        ptrap_ind = np.where(ptrap)[0]
+        ttrap_ind = np.where(ttrap)[0]
+        
+        ptrappc[ptrap_ind] = p_pc[ptrap_ind]
+        ttrappc[ttrap_ind] = t_pc[ttrap_ind]
+
+        self['pore.wetting_trapped_pc'] = ptrappc
+        self['throat.wetting_trapped_pc'] = ttrappc
+
+        # apply clone/replace semantics exactly like legacy
+        if mode == 'replace':
+            self['pore.wetting_inv_pc'][ptrap] = 0
+            self['throat.wetting_inv_pc'][ttrap] = 0
+            self['pore.wetting_inv_seq'][ptrap] = Mseq
+            self['throat.wetting_inv_seq'][ttrap] = Mseq
+            self['pore.wetting_inv_sat'] = Psat_trap
+            self['throat.wetting_inv_sat'] = Tsat_trap
+        elif mode == 'clone':
+            self['pore.wetting_inv_pc_trapping'] = np.copy(self['pore.wetting_inv_pc'])
+            self['throat.wetting_inv_pc_trapping'] = np.copy(self['throat.wetting_inv_pc'])
+            self['pore.wetting_inv_pc_trapping'][ptrap] = 0.0
+            self['throat.wetting_inv_pc_trapping'][ttrap] = 0.0
+            self['pore.wetting_inv_seq_trapping'] = np.copy(self['pore.wetting_inv_seq'])
+            self['throat.wetting_inv_seq_trapping'] = np.copy(self['throat.wetting_inv_seq'])
+            self['pore.wetting_inv_seq_trapping'][ptrap] = Mseq
+            self['throat.wetting_inv_seq_trapping'][ttrap] = Mseq
+            self['pore.wetting_inv_sat_trapping'] = Psat_trap
+            self['throat.wetting_inv_sat_trapping'] = Tsat_trap
+        else:
+            raise Exception("Mode argument must be 'replace' or 'clone'")
+        
+        print("______Wetting Masson's Aglorithm______")
+        print("min(Psat trap):", min(Psat_trap))
+        print("max(Psat trap):", max(Psat_trap))
+        print("min(Tsat trap):", min(Tsat_trap))
+        print("max(Tsat trap):", max(Tsat_trap))
+        print("Number of trapped pores for wetting:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats for wetting:", len(np.where(ttrap)[0]))
+        
+        '''
+        np.savetxt("wetting_NEW_CB/trapped_pores.txt", np.where(ptrap)[0], fmt="%s")
+        np.savetxt("wetting_NEW_CB/trapped_throats.txt", np.where(ttrap)[0], fmt="%s")
+        np.savetxt("wetting_NEW_CB/pressure_pores.txt", self['pore.wetting_inv_pc_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/pressure_throats.txt", self['throat.wetting_inv_pc_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/inv_seq_pores.txt", self['pore.wetting_inv_seq_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/inv_seq_throat.txt", self['throat.wetting_inv_seq_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/sat_pores.txt", self['pore.wetting_inv_sat_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/sat_throats.txt", self['throat.wetting_inv_sat_trapping'], fmt="%s")
+        np.savetxt("wetting_NEW_CB/ptrap_pc.txt", ptrappc, fmt="%s")
+        np.savetxt("wetting_NEW_CB/ttrap_pc.txt", ttrappc, fmt="%s")
+        np.savetxt("wetting_NEW_CB/pore_volumes_trap.txt", pvol[np.where(ptrap)[0]], fmt="%s")
+        np.savetxt("wetting_NEW_CB/throat_volumes_trap.txt", tvol[np.where(ptrap)[0]], fmt="%s")
+
+        with open("wetting_NEW_CB/some_values.txt", "w") as f:
+            f.write(f"Number of trapped pores: {len(np.where(ptrap)[0])}\n")
+            f.write(f"Number of trapped throats: {len(np.where(ttrap)[0])}\n")
+            f.write(f"trapped vol: {vol_trapped}\n")
+            f.write(f"total vol: {vol_mat}\n")
+            f.write(f"liquid vol: {vol_liq}\n")
+            f.write(f"min(Psat trap): {min(Psat_trap)}\n")
+        '''
+        print("Number of trapped pores:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats:", len(np.where(ttrap)[0]))
+   
+    def evaluate_trapping_imbibition_fast(self, p_outlets, mode='clone'):
+        """
+        Added on 21/11/2025 by Homam.
+
+        Masson-style reverse-uninvasion using a pore+throat bipartite CSR graph.
+        Produces the same outputs as `evaluate_trapping_imbibition.
+        """
+        start = time.perf_counter()
+        inv_points = list(self._imbibition_pc)  
+        pvol = self._net['pore.volume']  
+        tvol = self._net['throat.volume']
+        vol = np.concatenate((pvol, tvol))
+        vol_mat = np.sum(pvol) + np.sum(tvol)
+
+        Np = self.Np
+        Nt = self.Nt
+        N_tot = Np + Nt
+
+        ptrappc = np.zeros(Np)
+        ttrappc = np.zeros(Nt)
+        
+        p_pc = self['pore.entry_pressure']
+        t_pc = self['throat.entry_pressure']
+
+        pseq = self['pore.imbibition_inv_seq']
+        tseq = self['throat.imbibition_inv_seq']
+        Mseq = self._Mseq
+        pseqtrap = Mseq*np.ones([Np, ], dtype=float)
+        tseqtrap = Mseq*np.ones([Nt, ], dtype=float)
+        conns = self._net['throat.conns']  # shape (Nt, 2) with pore indices
+
+
+        # build pore–throat bipartite CSR adjacency for all N_tot nodes
+        AM = lil_matrix((N_tot, N_tot), dtype=np.int8) 
+        for ti, (r, c) in enumerate(conns):
+            e = Np + ti
+            AM[r, e] = 1; AM[e, r] = 1
+            AM[c, e] = 1; AM[e, c] = 1
+        AM = AM.tocsr()
+        indices = AM.indices
+        indptr = AM.indptr
+
+        po_index = np.asarray(np.where(p_outlets)[0], dtype=np.int64)
+
+        pseq = self['pore.imbibition_inv_seq']
+        tseq = self['throat.imbibition_inv_seq']
+        tot_seq = np.concatenate((pseq, tseq))
+
+        (
+        trapped_elements, 
+        trapped_steps,  
+        vol_trapped,
+        pore_id
+        ) = _find_trapped_pores(tot_seq, indices, indptr, po_index, vol)
+        
+        '''
+        trapped_elements: Indices of the trapped pores.
+        trapped_steps: Steps at which pores are trapped.
+        vol_trapped: The sum of total trapped pores' volume.
+        pore_id: The pore indices in the order they are uninvaded.
+
+        Note: For the calculation of the moisture content, by summing up the total trapped volume, we              
+              have the final value of the volumes filled with moisture, and from the last step to the              
+              first, for each pore which is untrapped we will substract it's volume from the total v-
+              olume at that step, which results in a step by step moisture content.
+        '''
+
+        vol_liq = vol_mat - vol_trapped
+        sat = vol_liq / vol_mat
+        sat_array = np.zeros(N_tot)
+        vol[trapped_elements] = 0
+
+        for ind in pore_id:
+            sat_array[ind] = sat
+            sat = sat - (vol[ind]/vol_mat)
+            
+        Psat_trap = sat_array[:Np]
+        Tsat_trap = sat_array[Np:]
+
+        ptrap = trapped_elements[:Np]
+        ttrap = trapped_elements[Np:]
+        
+        end = time.perf_counter() 
+        print("Time taken for calculation of the trapped pores:", end-start)
+
+        # write primary trapping outputs
+        Psat_trap[ptrap] = 10
+        Tsat_trap[ttrap] = 10
+
+        ptrap_ind = np.where(ptrap)[0]
+        ttrap_ind = np.where(ttrap)[0]
+        
+        ptrappc[ptrap_ind] = p_pc[ptrap_ind]
+        ttrappc[ttrap_ind] = t_pc[ttrap_ind]
+
+        self['pore.imbibition_trapped_pc'] = ptrappc
+        self['throat.imbibition_trapped_pc'] = ttrappc
+
+        # apply clone/replace semantics exactly like legacy
+        if mode == 'replace':
+            self['pore.imbibition_inv_pc'][ptrap] = 0
+            self['throat.imbibition_inv_pc'][ttrap] = 0
+            self['pore.imbibition_inv_seq'][ptrap] = Mseq
+            self['throat.imbibition_inv_seq'][ttrap] = Mseq
+            self['pore.imbibition_inv_sat'] = Psat_trap
+            self['throat.imbibition_inv_sat'] = Tsat_trap
+        elif mode == 'clone':
+            self['pore.imbibition_inv_pc_trapping'] = np.copy(self['pore.imbibition_inv_pc'])
+            self['throat.imbibition_inv_pc_trapping'] = np.copy(self['throat.imbibition_inv_pc'])
+            self['pore.imbibition_inv_pc_trapping'][ptrap] = 0.0
+            self['throat.imbibition_inv_pc_trapping'][ttrap] = 0.0
+            self['pore.imbibition_inv_seq_trapping'] = np.copy(self['pore.imbibition_inv_seq'])
+            self['throat.imbibition_inv_seq_trapping'] = np.copy(self['throat.imbibition_inv_seq'])
+            self['pore.imbibition_inv_seq_trapping'][ptrap] = Mseq
+            self['throat.imbibition_inv_seq_trapping'][ttrap] = Mseq
+            self['pore.imbibition_inv_sat_trapping'] = Psat_trap
+            self['throat.imbibition_inv_sat_trapping'] = Tsat_trap
+        else:
+            raise Exception("Mode argument must be 'replace' or 'clone'")
+        
+        print("______Masson's Aglorithm______")
+        print("min(Psat trap):", min(Psat_trap))
+        print("max(Psat trap):", max(Psat_trap))
+        print("min(Tsat trap):", min(Tsat_trap))
+        print("max(Tsat trap):", max(Tsat_trap))
+        print("Number of trapped pores:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats:", len(np.where(ttrap)[0]))
+        # print("Trapped Pores:",ptrap)
+        # print("Trapped Throats:",ttrap)
+        
+        '''
+        np.savetxt("NEW_CB/trapped_pores.txt", np.where(ptrap)[0], fmt="%s")
+        np.savetxt("NEW_CB/trapped_throats.txt", np.where(ttrap)[0], fmt="%s")
+        np.savetxt("NEW_CB/pressure_pores.txt", self['pore.imbibition_inv_pc_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/pressure_throats.txt", self['throat.imbibition_inv_pc_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/inv_seq_pores.txt", self['pore.imbibition_inv_seq_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/inv_seq_throat.txt", self['throat.imbibition_inv_seq_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/sat_pores.txt", self['pore.imbibition_inv_sat_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/sat_throats.txt", self['throat.imbibition_inv_sat_trapping'], fmt="%s")
+        np.savetxt("NEW_CB/ptrap_pc.txt", ptrappc, fmt="%s")
+        np.savetxt("NEW_CB/ttrap_pc.txt", ttrappc, fmt="%s")
+        np.savetxt("NEW_CB/pore_volumes_trap.txt", pvol[np.where(ptrap)[0]], fmt="%s")
+        np.savetxt("NEW_CB/throat_volumes_trap.txt", tvol[np.where(ptrap)[0]], fmt="%s")
+
+        with open("NEW_CB/some_values.txt", "w") as f:
+            f.write(f"Number of trapped pores: {len(np.where(ptrap)[0])}\n")
+            f.write(f"Number of trapped throats: {len(np.where(ttrap)[0])}\n")
+            f.write(f"trapped vol: {vol_trapped}\n")
+            f.write(f"total vol: {vol_mat}\n")
+            f.write(f"liquid vol: {vol_liq}\n")
+            f.write(f"min(Psat trap): {min(Psat_trap)}\n")
+        '''
     def evaluate_trapping_imbibition(self, p_outlets, mode='clone'):
         r"""
         Finds trapped pores and throats after a full imbibition
@@ -1260,6 +1592,7 @@ class Percolation(GenericAlgorithm):
         tseqtrap = Mseq*sp.ones([self.Nt, ], dtype=float)
         net = self._net
         conns = net['throat.conns']
+
         for i, inv_val in enumerate(inv_points): # sp.sort()
             # Find clusters of defender pores
             Pinvaded = pseq<=i
@@ -1325,8 +1658,12 @@ class Percolation(GenericAlgorithm):
         # modify results from run_wetting with out-of-range values.
         Psat_trap[ptrap] = 10
         Tsat_trap[ttrap] = 10
-        self['pore.imbibition_trapped_seq'] = pseqtrap
-        self['throat.imbibition_trapped_seq'] = tseqtrap
+        # print("vol trapped:",vol_trapped)
+        print("sat:",1-sat)
+        # print("t_ind:",len(np.where(ttrap)[0]))
+
+        # self['pore.imbibition_trapped_seq'] = pseqtrap
+        # self['throat.imbibition_trapped_seq'] = tseqtrap
         self['pore.imbibition_trapped_pc'] = ptrappc
         self['throat.imbibition_trapped_pc'] = ttrappc
         if mode=='replace':
@@ -1349,6 +1686,40 @@ class Percolation(GenericAlgorithm):
             self['throat.imbibition_inv_sat_trapping'] = Tsat_trap
         else:
             raise Exception('Mode argument is either \'replace\' or \'clone\'')
+        
+                
+        print("______OLD Aglorithm______")
+        print("Number of trapped pores:", len(np.where(ptrap)[0]))
+        print("Number of trapped throats:", len(np.where(ttrap)[0]))
+        print("min(Psat trap):", min(Psat_trap))
+        print("max(Psat trap):", max(Psat_trap))
+        print("min(Tsat trap):", min(Tsat_trap))
+        print("max(Tsat trap):", max(Tsat_trap))
+
+        # print("Trapped Pores:",ptrap)
+        # print("Trapped Throats:",ttrap)
+        '''
+        np.savetxt("OLD_CB/trapped_pores.txt", np.where(ptrap)[0], fmt="%s")
+        np.savetxt("OLD_CB/trapped_throats.txt", np.where(ttrap)[0], fmt="%s")
+        np.savetxt("OLD_CB/pressure_pores.txt", self['pore.imbibition_inv_pc_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/pressure_throats.txt", self['throat.imbibition_inv_pc_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/inv_seq_pores.txt", self['pore.imbibition_inv_seq_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/inv_seq_throat.txt", self['throat.imbibition_inv_seq_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/sat_pores.txt", self['pore.imbibition_inv_sat_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/sat_throats.txt", self['throat.imbibition_inv_sat_trapping'], fmt="%s")
+        np.savetxt("OLD_CB/ptrap_pc.txt", ptrappc, fmt="%s")
+        np.savetxt("OLD_CB/ttrap_pc.txt", ttrappc, fmt="%s")
+        np.savetxt("OLD_CB/pore_volumes_trap.txt", pvol[np.where(ptrap)[0]], fmt="%s")
+        np.savetxt("OLD_CB/throat_volumes_trap.txt", tvol[np.where(ptrap)[0]], fmt="%s")
+        
+        with open("OLD_CB/some_values.txt", "w") as f:
+            f.write(f"Number of trapped pores: {len(np.where(ptrap)[0])}\n")
+            f.write(f"Number of trapped throats: {len(np.where(ttrap)[0])}\n")
+            f.write(f"trapped vol: {vol_trapped}\n")
+            f.write(f"total vol: {vol_total}\n")
+            f.write(f"liquid vol: {vol_total - vol_trapped}\n")
+        '''
+
 
     def copy_results(self, pores=[], throats=[], phase=None,
                      prop_names=['wetting_inv_seq']):

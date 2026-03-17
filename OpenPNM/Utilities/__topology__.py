@@ -6,6 +6,7 @@ Network.tools.topology: Assorted topological manipulation methods
 
 """
 import scipy as _sp
+import numpy as np
 import scipy.sparse as _sprs
 import scipy.spatial as _sptl
 from OpenPNM.Base import logging as _logging
@@ -288,7 +289,7 @@ class topology(object):
         network._update_network()
 
     def stitch(self, network, donor, P_network, P_donor, method='nearest',
-               len_max=_sp.inf, label_suffix=''):
+               len_max=np.inf, label_suffix=''):
         r'''
         Stitches a second a network to the current network.
 

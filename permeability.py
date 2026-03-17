@@ -20,10 +20,11 @@ ctrl = bpnm.Base.Controller()
 ctrl.loglevel = 40
 
 # %% ==== Determine the parameters ====
-net = 'sintered_glass'
+# net = 'sintered_glass'
+net = 'CB_7mm_1.2um_1_1800.raw'
 scale = 1  # 1 or 1e-3
-case = 'wetting'  # wetting or imbibition
-dp = True
+case = 'imbibition'  # wetting or imbibition
+dp = False
 drying_case = 'desorption'  # drying or desorption
 direction = 'x'
 # setting can be 1,2 or 3 for respectively condensation only,condensation & surface ad/flow or condensation & surface ad/flow & corner ad/flow
@@ -31,7 +32,7 @@ setting = 3
 loc = os.getcwd() + '/'  # '/home/islah/Documents/01_Year-1/10_Papers/01Single/data/'
 Kang = False
 
-trapping = False
+trapping = True
 knudsen = True
 diffusion = True
 moist_volume = False
@@ -97,6 +98,7 @@ elif case == 'imbibition':
     (pn, geo, water, vapour, moisture, phys_water, phys_vapour, phys_moisture,
      alg_wp) = op.itemgetter(*keys)(ctrl)
     alg_dp = None
+
 # ctrl.export(network=pn, filename=filename)
 pn.cluster_types()
 # %% =========== Run the permeability algorithm ============
@@ -171,11 +173,16 @@ perm.permeability_curve(cases=cases, w_sat=w_sat,
                         single_flow=single_flow, corner_ad=corner_ad,
                         surf_flow=surf_flow, corner_flow=corner_flow, par_pc=0,
                         umfpack=umfpack, econd=econd, save_pcrate=True)
+# print("perm: ", perm.permeability_curve['saturation'])
+
+
 btime = time.time() - atime
 print('Elapsed time: ' + str(btime) + ' CPU seconds')
 # %% === Save the results into .csv file(s) ======
 
 data = perm.create_data()
+
+
 if savetopo:
     for case in data.keys():
         filename = loc + net + '_' + case
@@ -216,13 +223,14 @@ def _plot_2y(lpc, w, k):
     fig.tight_layout()
     plt.show()
 
-"""
+
 # plt.figure()
 for case in data.keys():
     x = data[case]['lpc']
     w = data[case]['moisture content']
     km = np.lib.scimath.log10(data[case]['k_moisture'])
     _plot_2y(x, w, km)
+
 
 # %% Plot hysteresis w(pc), k(pc), and k(w)
 if dp:
@@ -242,4 +250,4 @@ if dp:
 
     plt.figure('Hysteresis: k(w)')
     plt.plot(w1, k1, '-', w2, k2, '--')
-"""
+

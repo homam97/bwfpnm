@@ -323,6 +323,7 @@ class Permeability(Core):
             pc_list = list(_sp.sort(self._pc_grids)[::-1])
 #            case_split = case.split('_')
             case_split = [case]
+            
             if par_pc:
                 result = self._par_permeability_curve(alg, case, case_split, occupancy,
                                              trapping, occupy, pc_list,
@@ -332,13 +333,12 @@ class Permeability(Core):
             else:
                 while len(pc_list) > 0:
                     pc = pc_list.pop()
-                    print('Case: {}, Pc: {}'.format(case, pc))
+                    # print('Case: {}, Pc: {}'.format(case, pc))
                     pc_list = self._permeability_curve(pc, alg, case, case_split, occupancy,
                                              trapping, occupy, pc_list,
                                              surface_ad, corner_ad, par_pc,
                                              **kwargs)
-
-
+                    
                 algs = _sp.array(self._alg_flow[case], ndmin=1)
                 try:    # Works for permeable networks only
                     for alg in algs:
@@ -537,9 +537,11 @@ class Permeability(Core):
         phys_water = water._physics[0]
         phys_vapour = alg._phase_dry._physics[0]
         phys_moisture = moisture._physics[0]
+        
+        p_occ = water['pore.'+occupy]
+        t_occ = water['throat.'+occupy] 
+        # print("p occ", p_occ)
 
-        p_occ = water['pore.'+occupy] #self._water['pore.'+occupy]
-        t_occ = water['throat.'+occupy] #self._water['throat.'+occupy]
 #        if p_occ.sum()>0 or t_occ.sum()>0:
 #            print('number of water filled elements: {}'.format(p_occ.sum()+t_occ.sum()))
 
